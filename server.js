@@ -1,16 +1,36 @@
 const WS = require('ws');
+const axios = require('axios');
 const { v4: uuid } = require('uuid');
-const openai = require('openai');
 
 const port = process.env.PORT || 8080;
 const wss = new WS.Server({ port });
-const apiKey = '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';
-const openaiApi = new openai(apiKey);
+const OPENAI_API_KEY = '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';
+const API_URL = 'https://api.openai.com/v1/engines/davinci/completions';
 
 const clients = {};
 const messages = [];
 let messageIsPinned = false;
 let greet = false;
+
+// Функция для отправки сообщений на OpenAI
+const sendMessageToOpenAI = async (message) => {
+    try {
+        const response = await axios.post(API_URL, {
+            prompt: message,
+            max_tokens: 100,
+        }, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${OPENAI_API_KEY}`,
+            }
+        });
+
+        return response.data.choices[0].text;
+    } catch (error) {
+        console.error('Error while sending message to OpenAI:', error);
+        return 'An error occurred while processing the message.';
+    }
+};
 
 wss.on('connection', (ws) => {
 	const clientID = uuid();
@@ -19,9 +39,43 @@ wss.on('connection', (ws) => {
 	let loadEnd = messages.length;
 	let loadArr = messages;
 	let allLoaded = false;
-	ws.on('message', (rawMessage) => {
+	ws.on('message', async (rawMessage) => {
 		const message = JSON.parse(rawMessage);
 		console.log(message);
+
+		 // Отправка любых сообщений на OpenAI и обработка ответов
+		 if (!message.init && !message.greet && !message.search && !message.addToFavorite && !message.pinMessage && !message.unpinMessage && !message.showFavorite && !message.showAll) {
+            try {
+                const response = await sendMessageToOpenAI(message.content);
+
+                const id = uuid();
+                const date = new Date().getTime();
+                messages.push({
+                    id: id,
+                    usertype: message.usertype,
+                    username: message.botname ? message.botname : clientID,
+                    date: date,
+                    content: response,
+                });
+
+                clients[clientID].send(
+                    JSON.stringify({
+                        id: id,
+                        usertype: message.usertype,
+                        username: message.botname ? message.botname : clientID,
+                        date: date,
+                        content: response,
+                    })
+                );
+            } catch (error) {
+                console.error('Error while processing message:', error);
+                clients[clientID].send(
+                    JSON.stringify({
+                        error: 'An error occurred while processing the message.',
+                    })
+                );
+            }
+        }
 
 		if (message.init) {
 			if (!messages.length) {
@@ -225,8 +279,8 @@ wss.on('connection', (ws) => {
 					favorite: message.favorite,
 				})
 			);
-		}
-	});
+		} 
+		});
 
 	ws.on('close', () => {
 		delete clients.clientID;
